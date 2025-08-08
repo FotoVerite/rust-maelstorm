@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct Message {
     pub src: String,
     pub dest: String,
@@ -13,7 +13,7 @@ pub struct ReplyMessage {
     pub body: ReplyBody,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "type")]
 pub enum Body {
     #[serde(rename = "init")]
