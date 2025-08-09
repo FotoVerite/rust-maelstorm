@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use maelstrom_rust_node::state::State;
 mod test_utils;
+use maelstrom_rust_node::storage::Storage;
 use test_utils::*;
 #[test]
 fn ids_are_unique_for_single_node() {
@@ -47,9 +48,10 @@ fn no_collision_between_two_nodes() {
 #[test]
 fn ordering_survives_same_millisecond() {
     let mut state = State::new();
+
     state.node_id = Some("node".to_string());
 
-    let mut ids: Vec<String> = (0..1000).map(|_| state.next_id()).collect();
+    let ids: Vec<String> = (0..1000).map(|_| state.next_id()).collect();
 
     let mut sorted = ids.clone();
     sorted.sort_unstable();
@@ -57,18 +59,19 @@ fn ordering_survives_same_millisecond() {
     assert_eq!(ids, sorted, "IDs out of order within same millisecond");
 }
 
-
 #[test]
 fn generate_id_after_init_returns_proper_response() {
     let mut state = State::new();
 
     // Send init to set node_id in state
     let init_msg = make_init_msg();
-    let _ = run_test_message(&init_msg, &mut state);
+    let mut storage = Storage::new();
+
+    let _ = run_test_message(&init_msg, &mut state, &mut storage);
 
     // Now send generate message with msg_id 10
     let gen_msg = make_generate_msg(10);
-    let output = run_test_message(&gen_msg, &mut state);
+    let output = run_test_message(&gen_msg, &mut state, &mut storage);
 
     let resp: serde_json::Value = parse_reply(&output);
     let body = &resp["body"];
@@ -79,7 +82,10 @@ fn generate_id_after_init_returns_proper_response() {
     assert_eq!(body["in_reply_to"], 10);
 
     let id = body["id"].as_str().expect("id should be a string");
-    assert!(id.starts_with("node1-"), "id must start with node_id prefix");
+    assert!(
+        id.starts_with("node1-"),
+        "id must start with node_id prefix"
+    );
 }
 
 #[test]
@@ -89,7 +95,9 @@ fn generate_without_init_panics() {
 
     let gen_msg = make_generate_msg(42);
     // This should panic because state.node_id is None
-    let _ = run_test_message(&gen_msg, &mut state);
+    let mut storage = Storage::new();
+
+    let _ = run_test_message(&gen_msg, &mut state, &mut storage);
 }
 
 #[test]
@@ -98,12 +106,14 @@ fn multiple_generate_ids_are_ordered_and_unique() {
 
     // Initialize state with init message
     let init_msg = make_init_msg();
-    let _ = run_test_message(&init_msg, &mut state);
+    let mut storage = Storage::new();
+
+    let _ = run_test_message(&init_msg, &mut state, &mut storage);
 
     let mut ids = Vec::new();
     for i in 0..100 {
         let gen_msg = make_generate_msg(i);
-        let output = run_test_message(&gen_msg, &mut state);
+        let output = run_test_message(&gen_msg, &mut state, &mut storage);
         let resp: serde_json::Value = parse_reply(&output);
         let id = resp["body"]["id"].as_str().unwrap().to_string();
         ids.push(id);
