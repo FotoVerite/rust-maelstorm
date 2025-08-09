@@ -6,8 +6,8 @@ mod test_utils;
 
 use test_utils::*;
 
-#[test]
-fn test_broadcast_and_read() {
+#[tokio::test]
+async fn test_broadcast_and_read() {
     let mut state = State::new();
     let mut storage = Storage::new();
 
@@ -15,18 +15,18 @@ fn test_broadcast_and_read() {
     state.node_id = Some("node1".to_string());
 
     let broadcast_msg = make_broadcast_msg(1, 123);
-    let output = run_test_message(&broadcast_msg, &mut state, &mut storage);
+    let output = run_test_message(&broadcast_msg, &mut state, &mut storage).await;
     assert_response(&output, "broadcast_ok", |_| {});
 
     let read_msg = make_read_msg(2);
-    let output = run_test_message(&read_msg, &mut state, &mut storage);
+    let output = run_test_message(&read_msg, &mut state, &mut storage).await;
     assert_response(&output, "read_ok", |body| {
         assert_eq!(body["messages"], serde_json::json!([123]));
     });
 }
 
-#[test]
-fn test_read_empty() {
+#[tokio::test]
+async fn test_read_empty() {
     let mut state = State::new();
     let mut storage = Storage::new();
 
@@ -34,14 +34,14 @@ fn test_read_empty() {
     state.node_id = Some("node1".to_string());
 
     let read_msg = make_read_msg(1);
-    let output = run_test_message(&read_msg, &mut state, &mut storage);
+    let output = run_test_message(&read_msg, &mut state, &mut storage).await;
     assert_response(&output, "read_ok", |body| {
         assert_eq!(body["messages"], serde_json::json!([]));
     });
 }
 
-#[test]
-fn test_multiple_broadcasts() {
+#[tokio::test]
+async fn test_multiple_broadcasts() {
     let mut state = State::new();
     let mut storage = Storage::new();
 
@@ -49,13 +49,13 @@ fn test_multiple_broadcasts() {
     state.node_id = Some("node1".to_string());
 
     let broadcast_msg1 = make_broadcast_msg(1, 123);
-    let _ = run_test_message(&broadcast_msg1, &mut state, &mut storage);
+    let _ = run_test_message(&broadcast_msg1, &mut state, &mut storage).await;
 
     let broadcast_msg2 = make_broadcast_msg(2, 456);
-    let _ = run_test_message(&broadcast_msg2, &mut state, &mut storage);
+    let _ = run_test_message(&broadcast_msg2, &mut state, &mut storage).await;
 
     let read_msg = make_read_msg(3);
-    let output = run_test_message(&read_msg, &mut state, &mut storage);
+    let output = run_test_message(&read_msg, &mut state, &mut storage).await;
     assert_response(&output, "read_ok", |body| {
         assert_eq!(body["messages"], serde_json::json!([123, 456]));
     });

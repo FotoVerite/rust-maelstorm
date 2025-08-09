@@ -1,17 +1,15 @@
-use std::io::Write;
-
-use anyhow::Context;
+use tokio::sync::mpsc::Sender;
 
 use crate::{
     message::ReplyBody, state::State,
 };
 
-pub fn handle_id_gen<W: Write>(
+pub async fn handle_id_gen (
     src: String,
     dest: String,
     msg_id: u64,
     state: &mut State,
-    out: &mut W,
+    tx: Sender<String>,
 ) -> anyhow::Result<()> {
     let reply = ReplyBody::GenerateOk  {
         in_reply_to: msg_id,
@@ -25,5 +23,5 @@ pub fn handle_id_gen<W: Write>(
     });
     let json = serde_json::to_string(&response)?;
 
-    writeln!(out, "{}", json).context("Error sanding Echo Message")
+    Ok(tx.send(json).await?)
 }

@@ -1,15 +1,13 @@
-use std::io::Write;
-
-use anyhow::Context;
+use tokio::sync::mpsc::Sender;
 
 use crate::{message::ReplyBody, storage::Storage};
 
-pub fn handle_read<W: Write>(
+pub async fn handle_read(
     src: String,
     dest: String,
     msg_id: u64,
     storage: &Storage,
-    out: &mut W,
+    tx: Sender<String>,
 ) -> anyhow::Result<()> {
     let reply = ReplyBody::ReadOk {
         in_reply_to: msg_id,
@@ -22,5 +20,5 @@ pub fn handle_read<W: Write>(
     });
     let json = serde_json::to_string(&response)?;
 
-    writeln!(out, "{}", json).context("Error sanding Read Message")
+    Ok(tx.send(json).await?)
 }

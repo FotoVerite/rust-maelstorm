@@ -59,19 +59,19 @@ fn ordering_survives_same_millisecond() {
     assert_eq!(ids, sorted, "IDs out of order within same millisecond");
 }
 
-#[test]
-fn generate_id_after_init_returns_proper_response() {
+#[tokio::test]
+async fn generate_id_after_init_returns_proper_response() {
     let mut state = State::new();
 
     // Send init to set node_id in state
     let init_msg = make_init_msg();
     let mut storage = Storage::new();
 
-    let _ = run_test_message(&init_msg, &mut state, &mut storage);
+    let _ = run_test_message(&init_msg, &mut state, &mut storage).await;
 
     // Now send generate message with msg_id 10
     let gen_msg = make_generate_msg(10);
-    let output = run_test_message(&gen_msg, &mut state, &mut storage);
+    let output = run_test_message(&gen_msg, &mut state, &mut storage).await;
 
     let resp: serde_json::Value = parse_reply(&output);
     let body = &resp["body"];
@@ -88,32 +88,32 @@ fn generate_id_after_init_returns_proper_response() {
     );
 }
 
-#[test]
+#[tokio::test]
 #[should_panic(expected = "Node id has not been sent")]
-fn generate_without_init_panics() {
+async fn generate_without_init_panics() {
     let mut state = State::new();
 
     let gen_msg = make_generate_msg(42);
     // This should panic because state.node_id is None
     let mut storage = Storage::new();
 
-    let _ = run_test_message(&gen_msg, &mut state, &mut storage);
+    let _ = run_test_message(&gen_msg, &mut state, &mut storage).await;
 }
 
-#[test]
-fn multiple_generate_ids_are_ordered_and_unique() {
+#[tokio::test]
+async fn multiple_generate_ids_are_ordered_and_unique() {
     let mut state = State::new();
 
     // Initialize state with init message
     let init_msg = make_init_msg();
     let mut storage = Storage::new();
 
-    let _ = run_test_message(&init_msg, &mut state, &mut storage);
+    let _ = run_test_message(&init_msg, &mut state, &mut storage).await;
 
     let mut ids = Vec::new();
     for i in 0..100 {
         let gen_msg = make_generate_msg(i);
-        let output = run_test_message(&gen_msg, &mut state, &mut storage);
+        let output = run_test_message(&gen_msg, &mut state, &mut storage).await;
         let resp: serde_json::Value = parse_reply(&output);
         let id = resp["body"]["id"].as_str().unwrap().to_string();
         ids.push(id);

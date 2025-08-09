@@ -1,19 +1,17 @@
-use std::io::Write;
-
-use anyhow::Context;
+use tokio::sync::mpsc::Sender;
 
 use crate::{
     message::{ReplyBody},
     storage::Storage,
 };
 
-pub fn handle_broadcast<W: Write>(
+pub async fn handle_broadcast (
     src: String,
     dest: String,
     msg_id: u64,
     storage: &mut Storage,
     message: u64,
-    out: &mut W,
+    tx: Sender<String>,
 ) -> anyhow::Result<()> {
     storage.update_values(message);
     let reply = ReplyBody::BroadcastOk {
@@ -26,5 +24,5 @@ pub fn handle_broadcast<W: Write>(
     });
     let json = serde_json::to_string(&response)?;
 
-    writeln!(out, "{}", json).context("Error sanding Broadcast Message")
+    Ok(tx.send(json).await?)
 }

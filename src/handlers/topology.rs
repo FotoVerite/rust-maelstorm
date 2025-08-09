@@ -1,16 +1,14 @@
-use std::io::Write;
-
-use anyhow::Context;
+use tokio::sync::mpsc::Sender;
 
 use crate::{message::ReplyBody, storage::Storage};
 
-pub fn handle_topology<W: Write>(
+pub async fn handle_topology(
     src: String,
     dest: String,
     msg_id: u64,
     storage: &mut Storage,
     typology: Vec<String>,
-    out: &mut W,
+    tx: Sender<String>,
 ) -> anyhow::Result<()> {
     storage.update_typology(typology);
     let reply = ReplyBody::TopologyOk {
@@ -23,5 +21,5 @@ pub fn handle_topology<W: Write>(
     });
     let json = serde_json::to_string(&response)?;
 
-    writeln!(out, "{}", json).context("Error sanding Topology Message")
+    Ok(tx.send(json).await?)
 }

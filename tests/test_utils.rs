@@ -1,4 +1,5 @@
 use maelstrom_rust_node::{message::{Body, Message}, process_message_line, state::State, storage::Storage};
+use tokio::sync::mpsc;
 
 /// Helper to create a standard Init message
 #[allow(dead_code)]
@@ -54,13 +55,15 @@ pub fn parse_reply(output: &str) -> serde_json::Value {
 /// Runs the provided message JSON through your process_message_line function,
 /// captures and returns the output as a String
 #[allow(dead_code)]
-pub fn run_test_message(input_msg: &Message, state: &mut State, storage: &mut Storage) -> String {
+pub async fn run_test_message(input_msg: &Message, state: &mut State, storage: &mut Storage) -> String {
     let input_json = to_json_string(input_msg);
-    let mut output = Vec::new();
+    let (tx, mut rx) = mpsc::channel(1);
 
-    process_message_line(input_json, state, storage, &mut output).expect("Processing message failed");
+    process_message_line(input_json, state, storage, tx)
+        .await
+        .expect("Failed to process message");
 
-    String::from_utf8(output).expect("Output is not valid UTF-8")
+    rx.recv().await.expect("Failed to receive reply")
 }
 
 #[allow(dead_code)]
