@@ -27,15 +27,26 @@ pub fn make_echo_msg(echo_text: &str) -> Message {
     }
 }
 
+pub fn make_generate_msg(msg_id: u64) -> Message {
+    Message {
+        src: "client".to_string(),
+        dest: "node1".to_string(),
+        body: Body::Generate { msg_id },
+    }
+}
+
+
 /// Serialize a Message struct into a JSON string
 pub fn to_json_string(msg: &Message) -> String {
     serde_json::to_string(msg).expect("Failed to serialize message")
 }
 
 /// Deserialize JSON output string back into a Message struct
-pub fn parse_reply(output: &str) -> Message {
+
+pub fn parse_reply(output: &str) -> serde_json::Value {
     serde_json::from_str(output).expect("Failed to parse reply JSON")
 }
+
 
 /// Runs the provided message JSON through your process_message_line function,
 /// captures and returns the output as a String
@@ -43,7 +54,7 @@ pub fn run_test_message(input_msg: &Message, state: &mut State) -> String {
     let input_json = to_json_string(input_msg);
     let mut output = Vec::new();
 
-    process_message_line(input_json, &mut output).expect("Processing message failed");
+    process_message_line(input_json, state, &mut output).expect("Processing message failed");
 
     String::from_utf8(output).expect("Output is not valid UTF-8")
 }

@@ -25,18 +25,17 @@ pub enum Body {
     },
     #[serde(rename = "echo")]
     Echo { msg_id: u64, echo: String },
-    // Add more variants as needed
+    #[serde(rename = "generate")]
+    Generate { msg_id: u64 }, // Add more variants as needed
 }
-
 
 #[derive(Serialize, Debug)]
 #[serde(tag = "type")]
 pub enum ReplyBody {
     #[serde(rename = "init_ok")]
     InitOk { in_reply_to: u64 },
-
     #[serde(rename = "echo_ok")]
     EchoOk { in_reply_to: u64, echo: String },
-
-    // Add more variants as needed
+    #[serde(rename = "generate_ok")]
+    GenerateOk { id: String, in_reply_to: u64 }, // Add more variants as needed
 }

@@ -3,19 +3,19 @@ use std::io::Write;
 use anyhow::Context;
 
 use crate::{
-    message::{ReplyBody},
+    message::ReplyBody, state::State,
 };
 
-pub fn handle_echo<W: Write>(
+pub fn handle_id_gen<W: Write>(
     src: String,
     dest: String,
     msg_id: u64,
-    echo: String,
+    state: &mut State,
     out: &mut W,
 ) -> anyhow::Result<()> {
-    let reply = ReplyBody::EchoOk {
+    let reply = ReplyBody::GenerateOk  {
         in_reply_to: msg_id,
-        echo: echo
+        id: state.next_id()
     };
 
     let response = serde_json::json!({
