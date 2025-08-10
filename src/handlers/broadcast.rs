@@ -13,7 +13,7 @@ pub async fn handle_broadcast (
     message: u64,
     tx: Sender<String>,
 ) -> anyhow::Result<()> {
-    storage.update_values(message);
+    storage.update_values(src.clone(), message);
     let reply = ReplyBody::BroadcastOk {
         in_reply_to: msg_id,
     };

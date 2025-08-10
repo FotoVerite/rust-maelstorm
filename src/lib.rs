@@ -4,30 +4,30 @@ use anyhow::Context;
 use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::handlers::broadcast::handle_broadcast;
+use crate::handlers::broadcast_ok::handle_broadcast_ok;
 use crate::handlers::echo::handle_echo;
 use crate::handlers::id_gen::handle_id_gen;
 use crate::handlers::init::handle_init;
 use crate::handlers::read::handle_read;
 use crate::handlers::topology::handle_topology;
 use crate::message::{Body, Message};
-use crate::state::State;
 use crate::storage::Storage;
 
 pub mod handlers;
 pub mod message;
-pub mod state;
 pub mod storage;
+pub mod broadcast;
+mod snowflake;
 
 pub trait Handler {
     /// Handle an incoming message, possibly mutating state, and produce zero or more responses.
-    fn handle(&mut self, msg: &Message, state: &mut State) -> Vec<Message>;
+    fn handle(&mut self, msg: &Message, state: &mut Storage) -> Vec<Message>;
 }
 
 pub async fn process_message_line(
     line: String,
-    state: &mut State,
     storage: &mut Storage,
-    mut tx: Sender<String>,
+        tx: Sender<String>,
 ) -> anyhow::Result<()> {
     let msg: Message = serde_json::from_str(&line).expect("Invalid JSON");
 
@@ -44,18 +44,18 @@ pub async fn process_message_line(
             node_ids: _,
             workload: _,
         } => {
-            state.node_id = Some(node_id);
+            storage.set_id(&node_id).await;
             handle_init(src, dest, msg_id, tx).await
         }
         Body::Broadcast { msg_id, message } => {
             handle_broadcast(src, dest, msg_id, storage, message, tx).await
         }
+        Body::BroadcastOk { in_reply_to } => handle_broadcast_ok(src, dest, in_reply_to, storage).await,
         Body::Echo { msg_id, echo } => handle_echo(src, dest, msg_id, echo, tx).await,
-        Body::Generate { msg_id } => handle_id_gen(src, dest, msg_id, state, tx).await,
+        Body::Generate { msg_id } => handle_id_gen(src, dest, msg_id, storage, tx).await,
         Body::Read { msg_id } => handle_read(src, dest, msg_id, storage, tx).await,
         Body::Topology { msg_id, topology } => {
-            let node_id = &state
-                .node_id
+            let node_id = &storage.node_id.lock().await
                 .as_ref()
                 .expect("Node id has not been set")
                 .clone();

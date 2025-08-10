@@ -1,4 +1,4 @@
-use std::collections::{HashMap};
+use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -9,6 +9,7 @@ pub struct Message {
     pub body: Body,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct ReplyMessage {
     pub src: String,
     pub dest: String,
@@ -27,6 +28,8 @@ pub enum Body {
     },
     #[serde(rename = "broadcast")]
     Broadcast { msg_id: u64, message: u64 },
+    #[serde(rename = "broadcast_ok")]
+    BroadcastOk { in_reply_to: u64 },
     #[serde(rename = "echo")]
     Echo { msg_id: u64, echo: String },
     #[serde(rename = "generate")]
@@ -40,7 +43,7 @@ pub enum Body {
     }, // Add more variants as needed
 }
 
-#[derive(Serialize, Debug)]
+#[derive(Serialize, Debug, Deserialize)]
 #[serde(tag = "type")]
 pub enum ReplyBody {
     #[serde(rename = "broadcast_ok")]

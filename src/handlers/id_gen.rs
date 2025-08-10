@@ -1,19 +1,19 @@
 use tokio::sync::mpsc::Sender;
 
 use crate::{
-    message::ReplyBody, state::State,
+    message::ReplyBody, Storage,
 };
 
 pub async fn handle_id_gen (
     src: String,
     dest: String,
     msg_id: u64,
-    state: &mut State,
+    storage: &mut Storage,
     tx: Sender<String>,
 ) -> anyhow::Result<()> {
     let reply = ReplyBody::GenerateOk  {
         in_reply_to: msg_id,
-        id: state.next_id()
+        id: storage.next_id().to_string()
     };
 
     let response = serde_json::json!({
