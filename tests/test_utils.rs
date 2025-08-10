@@ -1,5 +1,4 @@
-use maelstrom_rust_node::{message::{Body, Message}, process_message_line, state::State, storage::Storage};
-use tokio::sync::mpsc;
+use maelstrom_rust_node::{message::{Body, Message}};
 
 /// Helper to create a standard Init message
 #[allow(dead_code)]
@@ -51,21 +50,6 @@ pub fn parse_reply(output: &str) -> serde_json::Value {
     serde_json::from_str(output).expect("Failed to parse reply JSON")
 }
 
-
-/// Runs the provided message JSON through your process_message_line function,
-/// captures and returns the output as a String
-#[allow(dead_code)]
-pub async fn run_test_message(input_msg: &Message, state: &mut State, storage: &mut Storage) -> String {
-    let input_json = to_json_string(input_msg);
-    let (tx, mut rx) = mpsc::channel(1);
-
-    process_message_line(input_json, state, storage, tx)
-        .await
-        .expect("Failed to process message");
-
-    rx.recv().await.expect("Failed to receive reply")
-}
-
 #[allow(dead_code)]
 pub fn make_broadcast_msg(msg_id: u64, message: u64) -> Message {
     Message {
@@ -101,22 +85,4 @@ pub fn make_topology_msg(msg_id: u64) -> Message {
             topology,
         },
     }
-}
-
-#[allow(dead_code)]
-pub fn setup_state(id: Option<String>) -> State {
-    let mut state = State::new();
-    state.node_id = id;
-    // any other setup
-    state
-}
-
-#[allow(dead_code)]
-pub fn assert_response<F>(output: &str, expected_type: &str, body_assertions: F)
-where
-    F: FnOnce(&serde_json::Value),
-{
-    let response = parse_reply(output);
-    assert_eq!(response["body"]["type"], expected_type);
-    body_assertions(&response["body"]);
 }
