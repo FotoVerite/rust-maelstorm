@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap};
 
 use serde::{Deserialize, Serialize};
 
@@ -15,6 +15,13 @@ pub struct ReplyMessage {
     pub dest: String,
     pub body: ReplyBody,
 }
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum BroadcastMessage {
+    Single(u64),
+    Multiple(Vec<u64>),
+    Hashmap(HashMap<String, u64>)
+}
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "type")]
@@ -26,16 +33,31 @@ pub enum Body {
         node_ids: Vec<String>,
         workload: Option<String>,
     },
+
+    #[serde(rename = "add")]
+    Add { msg_id: u64, delta: u64 },
     #[serde(rename = "broadcast")]
-    Broadcast { msg_id: u64, message: u64 },
+    Broadcast { msg_id: u64, message: BroadcastMessage },
     #[serde(rename = "broadcast_ok")]
     BroadcastOk { in_reply_to: u64 },
     #[serde(rename = "echo")]
     Echo { msg_id: u64, echo: String },
+    #[serde(rename = "error")]
+    Error { in_reply_to: u64, code: u64, text: String,  },
     #[serde(rename = "generate")]
     Generate { msg_id: u64 },
     #[serde(rename = "read")]
-    Read { msg_id: u64 },
+    Read { msg_id: u64, key: Option<String> },
+    #[serde(rename = "cas")]
+    Cas {
+        msg_id: u64,
+        key: String,
+        from: u64,
+        to: u64,
+        create_if_not_exists: bool,
+    },
+    #[serde(rename = "cas_ok")]
+    CasOk { in_reply_to: u64 },
     #[serde(rename = "topology")]
     Topology {
         msg_id: u64,
@@ -43,9 +65,20 @@ pub enum Body {
     }, // Add more variants as needed
 }
 
-#[derive(Serialize, Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum ReadMessage {
+    Single(u64),
+    Multiple(Vec<u64>),
+}
+
+
+
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ReplyBody {
+    #[serde(rename = "add_ok")]
+    AddOk { in_reply_to: u64 },
     #[serde(rename = "broadcast_ok")]
     BroadcastOk { in_reply_to: u64 },
     #[serde(rename = "init_ok")]
@@ -57,7 +90,7 @@ pub enum ReplyBody {
     #[serde(rename = "read_ok")]
     ReadOk {
         in_reply_to: u64,
-        messages: Vec<u64>,
+        messages: ReadMessage,
     },
     #[serde(rename = "topology_ok")]
     TopologyOk { in_reply_to: u64 },

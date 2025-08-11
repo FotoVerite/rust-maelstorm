@@ -1,7 +1,10 @@
 pub mod init;
+pub mod add;
 pub mod broadcast;
 pub mod broadcast_ok;
+pub mod cas_ok;
 pub mod echo;
+pub mod error;
 pub mod id_gen;
 pub mod read;
 pub mod topology;

@@ -6,7 +6,7 @@ use std::{
 use maelstrom_rust_node::{
     broadcast::actor::broadcast_message,
     process_message_line,
-    storage::{Storage, spawn_gossip_sender},
+    storage::{value_store::spawn_gossip_sender, Storage},
     write_stdout,
 };
 use tokio::{
@@ -19,7 +19,7 @@ async fn main() -> anyhow::Result<()> {
     let (gossip_sender, gossip_receiver) = mpsc::channel(1024);
 
     let tx_read = tx.clone();
-    let storage = Arc::new(Mutex::new(Storage::new()));
+    let storage = Arc::new(Mutex::new(Storage::new(gossip_sender.clone())));
     let storage_read = Arc::clone(&storage);
     let node_id_arc = Arc::clone(&storage_read.lock().await.node_id);
     let read_stdin_task = {
@@ -48,7 +48,7 @@ async fn main() -> anyhow::Result<()> {
         spawn_gossip_sender(Arc::clone(&storage), gossip_sender).await;
     });
     let broadcast_message_sender = tokio::spawn(async move {
-            let _ = broadcast_message(gossip_receiver, tx, node_id_arc).await;
+        let _ = broadcast_message(gossip_receiver, tx, node_id_arc).await;
     });
 
     let (reader_result, writer_result, _, _) = tokio::join!(

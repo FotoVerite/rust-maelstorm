@@ -1,15 +1,21 @@
 mod test_harness;
 mod test_utils;
 
+use maelstrom_rust_node::{
+    broadcast::broadcast::send_broadcast,
+    handlers::{broadcast::handle_broadcast, broadcast_ok::handle_broadcast_ok},
+    message::{Body, BroadcastMessage, Message}, storage::Storage,
+};
 use test_harness::*;
 use test_utils::*;
-use maelstrom_rust_node::{message::{Body, Message}, handlers::broadcast::handle_broadcast, handlers::broadcast_ok::handle_broadcast_ok, broadcast::broadcast::send_broadcast, storage::Storage};
 use tokio::sync::mpsc;
 
 #[tokio::test]
 async fn test_init_and_echo() {
     let mut network = TestNetwork::new();
-    network.add_node("node1".to_string(), "echo".to_string()).await;
+    network
+        .add_node("node1".to_string(), "echo".to_string())
+        .await;
 
     let init_msg = make_init_msg();
     network.send_message(init_msg);
@@ -22,14 +28,21 @@ async fn test_init_and_echo() {
     // Assert that node1's storage has the correct node_id set
     let node1_storage_arc = network.get_node_storage("node1");
     let node1_storage = node1_storage_arc.lock().await;
-    assert_eq!(*node1_storage.node_id.lock().await, Some("node1".to_string()));
+    assert_eq!(
+        *node1_storage.node_id.lock().await,
+        Some("node1".to_string())
+    );
 }
 
 #[tokio::test]
 async fn test_id_generation() {
     let mut network = TestNetwork::new();
-    network.add_node("node1".to_string(), "unique-ids".to_string()).await;
-    network.add_node("node2".to_string(), "unique-ids".to_string()).await;
+    network
+        .add_node("node1".to_string(), "unique-ids".to_string())
+        .await;
+    network
+        .add_node("node2".to_string(), "unique-ids".to_string())
+        .await;
 
     // Init nodes to set their node_ids
     let init_msg1 = Message {
@@ -58,9 +71,12 @@ async fn test_id_generation() {
     while network.tick().await {}
 
     // Consume init_ok replies
-    let _ = network.get_last_reply().expect("Should have received init_ok for node1");
-    let _ = network.get_last_reply().expect("Should have received init_ok for node2");
-
+    let _ = network
+        .get_last_reply()
+        .expect("Should have received init_ok for node1");
+    let _ = network
+        .get_last_reply()
+        .expect("Should have received init_ok for node2");
 
     let mut generated_ids = std::collections::HashSet::new();
 
@@ -75,15 +91,35 @@ async fn test_id_generation() {
 
         // Extract the generated ID from the last reply
         if let Some(reply_msg) = network.get_last_reply() {
-            let id = reply_msg.body.get("id").unwrap().as_str().unwrap().to_string();
-            assert!(generated_ids.insert(id.clone()), "Duplicate ID generated: {}", id);
+            let id = reply_msg
+                .body
+                .get("id")
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string();
+            assert!(
+                generated_ids.insert(id.clone()),
+                "Duplicate ID generated: {}",
+                id
+            );
         } else {
             panic!("Did not receive a reply for generate message 1");
         }
 
         if let Some(reply_msg) = network.get_last_reply() {
-            let id = reply_msg.body.get("id").unwrap().as_str().unwrap().to_string();
-            assert!(generated_ids.insert(id.clone()), "Duplicate ID generated: {}", id);
+            let id = reply_msg
+                .body
+                .get("id")
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string();
+            assert!(
+                generated_ids.insert(id.clone()),
+                "Duplicate ID generated: {}",
+                id
+            );
         } else {
             panic!("Did not receive a reply for generate message 2");
         }
@@ -94,23 +130,30 @@ async fn test_id_generation() {
 #[tokio::test]
 async fn test_read_messages() {
     let mut network = TestNetwork::new();
-    network.add_node("node1".to_string(), "broadcast".to_string()).await;
+    network
+        .add_node("node1".to_string(), "broadcast".to_string())
+        .await;
 
     // Init node1
     let init_msg = make_init_msg();
     network.send_message(init_msg);
     while network.tick().await {}
     // Consume the init_ok reply
-    let _ = network.get_last_reply().expect("Should have received init_ok");
+    let _ = network
+        .get_last_reply()
+        .expect("Should have received init_ok");
 
     // Broadcast some messages
     network.send_message(make_broadcast_msg(1, 100));
     network.send_message(make_broadcast_msg(2, 200));
     while network.tick().await {}
     // Consume broadcast_ok replies
-    let _ = network.get_last_reply().expect("Should have received broadcast_ok for msg 1");
-    let _ = network.get_last_reply().expect("Should have received broadcast_ok for msg 2");
-
+    let _ = network
+        .get_last_reply()
+        .expect("Should have received broadcast_ok for msg 1");
+    let _ = network
+        .get_last_reply()
+        .expect("Should have received broadcast_ok for msg 2");
 
     // Read messages from node1
     let read_msg = make_read_msg(3);
@@ -119,8 +162,12 @@ async fn test_read_messages() {
 
     // Assert that the read_ok message contains the broadcasted messages
     if let Some(reply_msg) = network.get_last_reply() {
+        dbg!(&reply_msg);
         assert_eq!(reply_msg.body.get("type").unwrap(), "read_ok");
-        assert_eq!(*reply_msg.body.get("messages").unwrap(), serde_json::json!([100, 200]));
+        assert_eq!(
+            *reply_msg.body.get("messages").unwrap(),
+            serde_json::json!([100, 200])
+        );
     } else {
         panic!("Did not receive a reply for read message");
     }
@@ -129,7 +176,9 @@ async fn test_read_messages() {
 #[tokio::test]
 async fn test_topology_update() {
     let mut network = TestNetwork::new();
-    network.add_node("node1".to_string(), "topology".to_string()).await;
+    network
+        .add_node("node1".to_string(), "topology".to_string())
+        .await;
 
     // Init node1
     let init_msg = make_init_msg();
@@ -150,14 +199,25 @@ async fn test_topology_update() {
 
 #[tokio::test]
 async fn test_handle_broadcast() {
-    let mut storage = Storage::new();
     let (tx, mut rx) = mpsc::channel(100);
+    let (broadcast_tx, mut _broadcast_rx) = mpsc::channel(100);
+
+    let mut storage: Storage = Storage::new(broadcast_tx);
 
     // Simulate init to set node_id
     storage.set_id("node1").await;
 
     // Handle a broadcast message
-    handle_broadcast("client".to_string(), "node1".to_string(), 1, &mut storage, 123, tx.clone()).await.unwrap();
+    handle_broadcast(
+        "client".to_string(),
+        "node1".to_string(),
+        1,
+        &mut storage,
+        BroadcastMessage::Single(123),
+        tx.clone(),
+    )
+    .await
+    .unwrap();
 
     // Assert storage is updated
     assert!(storage.values().contains(&123));
@@ -173,7 +233,15 @@ async fn test_handle_broadcast() {
 async fn test_send_broadcast() {
     let (tx, mut rx) = mpsc::channel(100);
 
-    send_broadcast("node1".to_string(), "node2".to_string(), 1, 123, tx.clone()).await.unwrap();
+    send_broadcast(
+        "node1".to_string(),
+        "node2".to_string(),
+        1,
+        BroadcastMessage::Single(123),
+        tx.clone(),
+    )
+    .await
+    .unwrap();
 
     let sent_msg_str = rx.recv().await.unwrap();
     let sent_msg: serde_json::Value = serde_json::from_str(&sent_msg_str).unwrap();
@@ -187,7 +255,8 @@ async fn test_send_broadcast() {
 
 #[tokio::test]
 async fn test_handle_broadcast_ok() {
-    let mut storage = Storage::new();
+    let (tx, mut _rx) = mpsc::channel(100);
+    let mut storage = Storage::new(tx);
     storage.set_id("node1").await;
 
     // Set up topology so node1 knows about node2
@@ -201,7 +270,9 @@ async fn test_handle_broadcast_ok() {
     assert!(storage.peer_pending.get("node2").unwrap().contains(&key));
 
     // Handle broadcast_ok from node2
-    handle_broadcast_ok("node2".to_string(), "node1".to_string(), key, &mut storage).await.unwrap();
+    handle_broadcast_ok("node2".to_string(), "node1".to_string(), key, &mut storage)
+        .await
+        .unwrap();
 
     // Assert pending message is removed
     assert!(!storage.peer_pending.get("node2").unwrap().contains(&key));

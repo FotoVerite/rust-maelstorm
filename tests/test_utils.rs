@@ -57,7 +57,7 @@ pub fn make_broadcast_msg(msg_id: u64, message: u64) -> Message {
         dest: "node1".to_string(),
         body: Body::Broadcast {
             msg_id,
-            message,
+            message: maelstrom_rust_node::message::BroadcastMessage::Single(message),
         },
     }
 }
@@ -69,6 +69,7 @@ pub fn make_read_msg(msg_id: u64) -> Message {
         dest: "node1".to_string(),
         body: Body::Read {
             msg_id,
+            key: None
         },
     }
 }
