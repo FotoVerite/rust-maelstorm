@@ -1,4 +1,6 @@
-use tokio::sync::mpsc::Sender;
+use std::sync::{Arc};
+
+use tokio::sync::Mutex;
 
 use crate::{message::ReplyBody, storage::Storage};
 
@@ -6,11 +8,14 @@ pub async fn handle_add(
     src: String,
     dest: String,
     msg_id: u64,
-    storage: &mut Storage,
+    storage: Arc<Mutex<Storage>>,
     delta: u64,
-    tx: Sender<String>
-) -> anyhow::Result<()> {
-    storage.process_add(delta, src.clone(), msg_id).await;
+) -> anyhow::Result<String> {
+    tokio::spawn(async move {
+        let mut storage = storage.lock().await;
+        let _ = storage.g_counter.process_add(delta).await;
+    });
+
     let reply = ReplyBody::AddOk {
         in_reply_to: msg_id,
     };
@@ -21,6 +26,5 @@ pub async fn handle_add(
         "body": reply,
     });
     let json = serde_json::to_string(&response)?;
-
-    Ok(tx.send(json).await?)
+    Ok(json)
 }

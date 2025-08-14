@@ -1,178 +1,83 @@
-use std::collections::BTreeSet;
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::{Mutex, mpsc::Sender};
+use std::collections::HashSet;
+use tokio::sync::mpsc::Sender;
 
-use crate::{broadcast::actor::BroadcastCommand, message::BroadcastMessage, storage::node_state::NodeStatus};
+use crate::storage::SharedStore;
 
-use super::Storage;
-
-impl Storage {
-    pub fn update_values(&mut self, src: String, message: u64) {
-        let id = self.node_id_to_u64();
-        let key = self.snowflake.next_id(id);
-        self.values.insert(key, (src.to_string(), message));
-        let nodes: Vec<String> = self.topology.iter().cloned().collect();
-        for node in nodes {
-            if node != src {
-                self.add_to_pending(node.clone(), key);
-            }
-        }
-    }
-
-    pub fn remove_from_peer_pending(&mut self, node: String, key: u64) {
-        let now: u64 = (self.clock)();
-        if let Some(candidates) = self.peer_pending.get_mut(&node) {
-            candidates.remove(&key);
-        }
-        if let Some(status) = self.node_status.get_mut(&node) {
-            match status {
-                NodeStatus::Online(time) => *time = now,
-                NodeStatus::Rejoining(_, _) => *status = NodeStatus::Online(now),
-                NodeStatus::Offline(_last_seen) => {
-                    *status = NodeStatus::Online(now);
-                    let known = &self.values;
-                    let pending = self
-                        .peer_pending
-                        .entry(node.clone())
-                        .or_insert(BTreeSet::new());
-                    for k in known.keys() {
-                        pending.insert(*k);
-                    }
-                }
-            };
-        }
-    }
-
-    fn add_to_pending(&mut self, node: String, key: u64) {
-        let entry = self.peer_pending.entry(node).or_insert(BTreeSet::new());
-        entry.insert(key);
-    }
+pub struct ValueStore {
+    data: SharedStore,
+    seen_values: HashSet<u64>,
+    to_worker: Sender<(String, u64)>,
 }
 
-pub async fn spawn_gossip_sender(arc_storage: Arc<Mutex<Storage>>, tx: Sender<BroadcastCommand>) {
-    tokio::spawn(async move {
-        let mut online_interval = tokio::time::interval(Duration::from_secs(1));
-        let mut offline_interval = tokio::time::interval(Duration::from_secs(3));
-        loop {
-            tokio::select! {
-                            _ = online_interval.tick() => {
-
-                                let mut to_send = Vec::new();
-
-                                {
-                                    let mut storage = arc_storage.lock().await;
-                                    if storage._node_id.is_none() {
-                                        continue;
-                                    }
-                                    storage.update_node_states();
-
-                                    for node in storage.online_nodes() {
-                                        if let Some(pending) = storage.peer_pending.get(node) {
-                                            for key in pending.iter() {
-                                                if let Some(message) = storage.values.get(key) {
-                                                    to_send.push((node.clone(), *key, message.1));
-                                                }
-                                            }
-                                        }
-                                    }
-                                } // lock dropped here
-
-                                for (dest, msg_id, message) in to_send {
-                                    let _ = tx
-                                        .send(BroadcastCommand::Broadcast {
-                                            dest,
-                                            msg_id,
-                                            message: BroadcastMessage::Single(message),
-                                        })
-                                        .await;
-                                }
-                            }
-
-                            _ = offline_interval.tick() => {
-
-                                let mut to_send = Vec::new();
-
-                                {
-                                    let  storage = arc_storage.lock().await;
-                                    if storage._node_id.is_none() {
-                                        continue;
-                                    }
-
-                                    for node in storage.offline_nodes() {
-                                        if let Some(pending) = storage.peer_pending.get(node) {
-                                            for key in pending.iter() {
-                                                if let Some(message) = storage.values.get(key) {
-                                                    to_send.push((node.clone(), *key, message.1));
-                                                }
-                                            }
-                                        }
-                                    }
-                                } // lock dropped here
-
-                                for (dest, msg_id, message) in to_send {
-                                    let _ = tx
-                                        .send(BroadcastCommand::Broadcast {
-                                            dest,
-                                            msg_id,
-                                                                            message: BroadcastMessage::Single(message)
-            ,
-                                        })
-                                        .await;
-                                }
-                            }
-                        }
+impl ValueStore {
+    pub fn new(data: SharedStore, tx: Sender<(String, u64)>) -> Self {
+        Self {
+            data,
+            seen_values: HashSet::new(),
+            to_worker: tx,
         }
-    });
-}
-
-
-#[cfg(test)]
-mod tests {
-    use crate::storage::Storage;
-    use super::*;
-
-    #[tokio::test]
-    async fn update_values_adds_message_and_marks_all_peers_pending_except_src() {
-        let (tx, _rx) = tokio::sync::mpsc::channel(10);
-        let mut store = Storage::new(tx);
-        store.set_id("node-A").await;
-
-        store.update_typology(vec!["node-B".into(), "node-C".into()]);
-
-        store.update_values("node-A".to_string(), 42);
-
-        let key = *store.values.keys().next().unwrap();
-        let val = store.values.get(&key).unwrap();
-        assert_eq!(val.1, 42);
-
-        // node-B and node-C should have the key pending, but node-A should not
-        for peer in ["node-B", "node-C"] {
-            assert!(store.peer_pending.get(peer).unwrap().contains(&key));
-        }
-        assert!(
-            !store.peer_pending.contains_key("node-A")
-                || !store.peer_pending["node-A"].contains(&key)
-        );
     }
 
-    #[tokio::test]
-    async fn remove_from_peer_pending_removes_key_and_updates_status() {
-        let (tx, _rx) = tokio::sync::mpsc::channel(10);
-        let mut store = Storage::new(tx);
-        store.set_id("node-A").await;
+    /// Return all values in store
+    pub fn values(&self) -> Vec<u64> {
+        self.data.read().unwrap().iter().copied().collect()
+    }
 
-        store.update_typology(vec!["node-B".into()]);
-        store.update_values("node-A".to_string(), 123);
+    /// Iterator over values starting after a given key
+    // pub fn values_from(&self, starting_after: u64) -> impl Iterator<Item = (&u64, &u64)> {
+    //     self.data
+    //         .range((Excluded(&starting_after), Unbounded))
+    //         .into_iter()
+    // }
 
-        let key = *store.values.keys().next().unwrap();
+    // /// Send catchup messages in batches
+    // pub async fn send_catchup(&self, node: String, starting_after: u64, batch_size: usize) {
+    //     let mut batch = Vec::with_capacity(batch_size);
 
-        store.remove_from_peer_pending("node-B".to_string(), key);
+    //     for (key, value) in self.values_from(starting_after) {
+    //         let cmd = PendingCommand::Add {
+    //             key: *key,
+    //             dest: node.clone(),
+    //             value: *value,
+    //         };
+    //         batch.push(cmd);
+    //         if batch.len() == batch_size {
+    //             if self
+    //                 .to_worker
+    //                 .send(PendingMessage::Catchup(batch))
+    //                 .await
+    //                 .is_err()
+    //             {
+    //                 return; // receiver dropped
+    //             }
+    //             batch = Vec::with_capacity(batch_size);
+    //         }
+    //     }
 
-        assert!(store.peer_pending.get("node-B").unwrap().is_empty());
-        assert!(matches!(
-            store.node_status.get("node-B"),
-            Some(NodeStatus::Online(_))
-        ));
+    //     if !batch.is_empty() {
+    //         let _ = self.to_worker.send(PendingMessage::Catchup(batch)).await;
+    //     }
+    // }
+
+    /// Insert a new value if not already present
+    /// Returns true if the value was new
+    pub fn update_store_data(&mut self, value: u64) -> bool {
+        // Insert only if the value itself is new
+        if self.seen_values.contains(&value) {
+            return false;
+        }
+
+        self.data.write().unwrap().insert(value);
+        self.seen_values.insert(value);
+        true
+    }
+
+    /// Remove pending message for a specific key/dest
+    pub async fn remove_pending(&self, dest: String, value: u64) {
+        let _ = self.to_worker.send((dest, value)).await;
+    }
+
+    pub fn contains_value(&self, value: u64) -> bool {
+        self.seen_values.contains(&value)
     }
 }

@@ -1,6 +1,8 @@
-use std::io::Write;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::io::{AsyncWriteExt};
 
-use anyhow::Context;
+use tokio::sync::Mutex;
 use tokio::sync::mpsc::{Receiver, Sender};
 
 use crate::handlers::add::handle_add;
@@ -19,8 +21,9 @@ use crate::storage::Storage;
 pub mod broadcast;
 pub mod handlers;
 pub mod message;
-pub mod storage;
 mod snowflake;
+pub mod storage;
+pub mod workers;
 
 pub trait Handler {
     /// Handle an incoming message, possibly mutating state, and produce zero or more responses.
@@ -29,76 +32,86 @@ pub trait Handler {
 
 pub async fn process_message_line(
     line: String,
-    storage: &mut Storage,
+    storage: Arc<Mutex<Storage>>,
+    processed: &mut HashMap<(String, u64), Option<String>>,
     tx: Sender<String>,
 ) -> anyhow::Result<()> {
-    eprintln!("{}", &line);
+    let workload = "broadcast";
+
     let msg: Message = serde_json::from_str(&line).expect("Invalid JSON");
 
     // Always handle 'init' globally
 
     let src = msg.src;
+
     let dest = msg.dest;
     let body = msg.body;
-    // Dispatch to specific handlers based on workload
-    match body {
+    let key = (src.clone(), *body.cache_id());
+
+    if let Some(Some(json)) = processed.get(&key) {
+        tx.send(json.clone()).await?;
+        return Ok(())
+    }
+    // // Dispatch to specific handlers based on workload
+    let json: Option<String> = match body {
         Body::Init {
             msg_id,
             node_id,
             node_ids: _,
             workload: _,
         } => {
-            storage.set_id(&node_id).await;
-            handle_init(src, dest, msg_id, tx).await
+            let mut guard = storage.lock().await;
+            guard.set_id(&node_id).await;
+            Some(handle_init(src, dest, msg_id).await?)
         }
-        Body::Add { msg_id, delta } => handle_add(src, dest, msg_id, storage, delta, tx).await,
-        Body::Cas { .. } => Ok(()),
-        Body::CasOk { in_reply_to } => handle_cas_ok(src, in_reply_to, storage, tx).await,
-
+        Body::Add { msg_id, delta } => Some(handle_add(src, dest, msg_id, storage, delta).await?),
+        Body::Cas { .. } => None,
+        Body::CasOk { in_reply_to } => {
+            handle_cas_ok(src, in_reply_to, storage).await?;
+            None
+        }
         Body::Broadcast { msg_id, message } => {
-            handle_broadcast(src, dest, msg_id, storage, message, tx).await
+            Some(handle_broadcast(src, dest, msg_id, storage, message).await?)
         }
         Body::BroadcastOk { in_reply_to } => {
-            handle_broadcast_ok(src, dest, in_reply_to, storage).await
+            handle_broadcast_ok(src, dest, in_reply_to, storage).await?;
+            None
         }
-        Body::Echo { msg_id, echo } => handle_echo(src, dest, msg_id, echo, tx).await,
+        Body::Echo { msg_id, echo } => Some(handle_echo(src, dest, msg_id, echo)?),
         Body::Error {
             in_reply_to,
             code: _,
             text: _,
-        } => handle_error(in_reply_to, storage).await,
+        } => {
+            handle_error(in_reply_to, storage).await?;
+            None
+        }
 
-        Body::Generate { msg_id } => handle_id_gen(src, dest, msg_id, storage, tx).await,
-        Body::Read { msg_id, key: _, } => match &storage.workload {
-            Some(workload) if workload == "g-counter" => {
-                handle_g_counter_read(src, dest, msg_id, storage, tx).await
-            }
-            _ => handle_read(src, dest, msg_id, storage, tx).await,
+        Body::Generate { msg_id } => Some(handle_id_gen(src, dest, msg_id, storage).await?),
+        Body::Read { msg_id, key: _ } => match workload {
+            "g-counter" => Some(handle_g_counter_read(src, dest, msg_id, storage).await?),
+            _ => Some(handle_read(src, dest, msg_id, storage).await?),
         },
         Body::Topology { msg_id, topology } => {
-            let node_id = &storage
-                .node_id
-                .lock()
-                .await
-                .as_ref()
-                .expect("Node id has not been set")
-                .clone();
-            let node = topology.get(node_id).expect("should have found node");
-            handle_topology(src, dest, msg_id, storage, node.clone(), tx).await
+            Some(handle_topology(src, dest, msg_id, topology, storage).await?)
         }
+    };
+    processed.insert(key, json.clone());
+    if let Some(json) = json {
+        Ok(tx.send(json).await?)
+    } else {
+        Ok(())
     }
 }
 
-pub async fn write_stdout<W: Write>(mut writer: W, mut rx: Receiver<String>) -> anyhow::Result<()> {
-    while let Some(msg) = rx.recv().await {
-        eprintln!("{}", &msg);
-        if let Err(e) = writeln!(writer, "{}", msg).context("Failed to output to stdout") {
-            eprintln!(
-                "Writer error ({}), shutting down response handler for msg: {:?}",
-                e, msg
-            );
-            break;
-        }
+pub async fn write_stdout<W: tokio::io::AsyncWrite + Unpin>(
+    mut writer: W,
+    mut rx: Receiver<String>,
+) -> anyhow::Result<()> {
+    while let Some(mut msg) = rx.recv().await {
+        msg.push('\n');
+        writer.write_all(msg.as_bytes()).await?;
+        writer.flush().await?;
     }
     Ok(())
 }

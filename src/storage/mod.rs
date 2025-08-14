@@ -1,87 +1,172 @@
-pub mod cas;
 pub mod g_counter;
-pub mod node_state;
+pub mod neighbors;
+pub mod node_context;
 pub mod value_store;
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
-    hash::{DefaultHasher, Hash, Hasher},
-    sync::Arc,
+    collections::{HashMap, HashSet},
+    sync::{Arc, RwLock},
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use tokio::sync::{Mutex, mpsc::Sender};
+use tokio::sync::{
+    mpsc::{self, Sender},
+};
 
-use crate::{broadcast::actor::BroadcastCommand, snowflake::Snowflake};
+use crate::{
+    broadcast::actor::BroadcastCommand,
+    snowflake::Snowflake,
+    storage::{
+        g_counter::GCounter,
+        neighbors::{offline_nodes, online_nodes, NodeStatus},
+        node_context::NodeContext,
+        value_store::ValueStore,
+    }, workers::broadcast::BroadcastWorker,
+};
 
-use self::{cas::PendingRequest, node_state::NodeStatus};
+pub type SharedNodeId = Arc<RwLock<Option<String>>>;
+pub type SharedStore = Arc<RwLock<HashSet<u64>>>;
+pub type SharedNeighbors = Arc<RwLock<HashMap<String, NodeStatus>>>;
 
-pub type NodeId = Arc<Mutex<Option<String>>>;
+pub enum StorageBroadcastCommand {
+    GCounter(HashMap<String, u64>),
+}
 
 pub struct Storage {
-    pub node_id: NodeId,
-    _node_id: Option<String>,
-    pub topology: HashSet<String>,
-    pub values: BTreeMap<u64, (String, u64)>,
-    pub peer_pending: BTreeMap<String, BTreeSet<u64>>,
-    pending_cas: HashMap<u64, PendingRequest>,
-
-    pub snowflake: Snowflake, // ...
-    pub node_status: HashMap<String, NodeStatus>,
+    pub node_id: SharedNodeId,
+    pub neighbors: SharedNeighbors,
+    pub values: ValueStore,
+    pub g_counter: GCounter,
     pub workload: Option<String>,
+    pub processed: HashMap<u64, String>,
     clock: Arc<dyn Fn() -> u64 + Send + Sync>,
-    pub counter: HashMap<String, u64>,
+    pub snowflake: Arc<Snowflake>,
     pub tx: Sender<BroadcastCommand>,
 }
 
+fn get_node_id(node_id: SharedNodeId) -> impl Fn() -> String + Send + Sync + 'static {
+    move || {
+        node_id
+            .read()
+            .unwrap()
+            .as_ref()
+            .expect("node_id is not set")
+            .clone()
+    }
+}
+
+fn online_neighbors(
+    neighbors: SharedNeighbors,
+) -> impl Fn() -> Vec<String> + Send + Sync + 'static {
+    move || {
+        let neighbors = Arc::clone(&neighbors);
+        online_nodes(neighbors)
+    }
+}
+fn offline_neighbors(
+    neighbors: SharedNeighbors,
+) -> impl Fn() -> Vec<String> + Send + Sync + 'static {
+    move || {
+        let neighbors = Arc::clone(&neighbors);
+        offline_nodes(neighbors)
+    }
+}
+
 impl Storage {
-    pub fn new_with_clock<F>(tx: Sender<BroadcastCommand>, clock: F) -> Self
+     pub fn new_with_clock<F>(tx: Sender<BroadcastCommand>, clock: F) -> Self
     where
         F: Fn() -> u64 + Send + Sync + 'static,
     {
-        let storage = Self {
-            node_id: Arc::new(Mutex::new(None)),
-            _node_id: None,
-            topology: HashSet::new(),
-            values: BTreeMap::new(),
-            peer_pending: BTreeMap::new(),
-            pending_cas: HashMap::new(),
-            snowflake: Snowflake::new(),
-            node_status: HashMap::new(),
-            clock: Arc::new(clock),
-            counter: HashMap::new(),
-            workload: Some("".into()),
-            tx,
+        let (gossip_sender, _gossip_receiver) = mpsc::channel(1024);
+        let (broadcast_worker_tx, broadcast_worker_rx) = mpsc::channel(1024);
+
+        let node_id = Arc::new(RwLock::new(None));
+        let store: SharedStore = Arc::new(RwLock::new(HashSet::new()));
+        let neighbors: SharedNeighbors = Arc::new(RwLock::new(HashMap::new()));
+        let snowflake = Arc::new(Snowflake::new());
+
+        let make_next_id = |snowflake: Arc<Snowflake>| -> Box<dyn Fn() -> u64 + Send + Sync> {
+            Box::new(move || {
+            
+                snowflake.next_id()
+            })
         };
-        storage
+
+        let make_broadcast = |tx: Sender<BroadcastCommand>| {
+            let tx_clone = tx.clone();
+            move |cmd| {
+                let tx_inner = tx_clone.clone();
+                tokio::spawn(async move { let _ = tx_inner.send(cmd).await; });
+            }
+        };
+
+        let make_gossip = |tx: Sender<StorageBroadcastCommand>| {
+            let tx_clone = tx.clone();
+            move |cmd| {
+                let tx_inner = tx_clone.clone();
+                tokio::spawn(async move { let _ = tx_inner.send(cmd).await; });
+            }
+        };
+
+        let g_counter_context = NodeContext {
+            broadcast: Box::new(make_broadcast(tx.clone())),
+            next_id: make_next_id(Arc::clone(&snowflake)),
+            online_neighbors: Box::new(online_neighbors(Arc::clone(&neighbors))),
+            offline_neighbors: Box::new(offline_neighbors(Arc::clone(&neighbors))),
+            get_node_id: Box::new(get_node_id(Arc::clone(&node_id))),
+            gossip: Box::new(make_gossip(gossip_sender.clone())),
+        };
+
+        let value_context = NodeContext {
+            broadcast: Box::new(make_broadcast(tx.clone())),
+            next_id: make_next_id(Arc::clone(&snowflake)),
+            online_neighbors: Box::new(online_neighbors(Arc::clone(&neighbors))),
+            offline_neighbors: Box::new(offline_neighbors(Arc::clone(&neighbors))),
+            get_node_id: Box::new(get_node_id(Arc::clone(&node_id))),
+            gossip: Box::new(make_gossip(gossip_sender.clone())),
+        };
+
+        let mut broadcast_worker = BroadcastWorker::new(value_context, Arc::clone(&store), broadcast_worker_rx);
+        tokio::spawn( async move {broadcast_worker.run().await});
+
+        Self {
+            node_id,
+            neighbors,
+            g_counter: GCounter::new(g_counter_context),
+            values: ValueStore::new(store, broadcast_worker_tx),
+            clock: Arc::new(clock),
+            workload: Some("".into()),
+            processed: HashMap::new(),
+            snowflake,
+            tx,
+        }
     }
 
     pub fn new(tx: Sender<BroadcastCommand>) -> Self {
         Self::new_with_clock(tx, || time_now())
     }
 
+    pub fn get_node_id(&mut self) -> String {
+        self.node_id
+            .read()
+            .unwrap()
+            .as_ref()
+            .expect("node_id is not set")
+            .clone()
+    }
+
+    pub fn boxed_next_id(&self) -> Box<dyn Fn() -> u64 + Send + Sync + 'static> {
+        let snowflake = Arc::clone(&self.snowflake);
+        Box::new(move || snowflake.next_id())
+    }
+
+
+    fn time_now(&self) -> u64 {
+        (self.clock)()
+    }
+
     pub async fn set_id(&mut self, id: &str) {
-        self._node_id = Some(id.to_string());
-        *self.node_id.lock().await = Some(id.to_string());
-    }
-
-    fn node_id_to_u64(&self) -> u64 {
-        let node_id = self._node_id.as_ref().expect("Node Id not set");
-        let mut hasher = DefaultHasher::new();
-        node_id.hash(&mut hasher);
-        hasher.finish()
-    }
-
-    pub fn next_id(&self) -> u64 {
-        let id = self.node_id_to_u64();
-        self.snowflake.next_id(id)
-    }
-
-    pub fn values(&self) -> Vec<u64> {
-        self.values
-            .values()
-            .map(|(_, v)| v.clone())
-            .collect::<Vec<u64>>()
+        *self.node_id.write().unwrap() = Some(id.to_string());
     }
 }
 
@@ -93,108 +178,4 @@ fn time_now() -> u64 {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::Arc;
-    use tokio::sync::Mutex;
-
-    #[allow(dead_code)]
-    async fn make_storage_with_id(id: &str) -> Arc<Mutex<Storage>> {
-        let (tx, _rx) = tokio::sync::mpsc::channel(10);
-        let mut store = Storage::new(tx);
-        store.set_id(id).await;
-        Arc::new(Mutex::new(store))
-    }
-
-    #[tokio::test]
-    async fn set_id_stores_node_id() {
-        let (tx, _rx) = tokio::sync::mpsc::channel(10);
-        let mut store = Storage::new(tx);
-        store.set_id("node-A").await;
-
-        assert_eq!(store._node_id.as_deref(), Some("node-A"));
-        let node_id_guard = store.node_id.lock().await;
-        assert_eq!(node_id_guard.as_deref(), Some("node-A"));
-    }
-
-    #[tokio::test]
-    async fn update_typology_inserts_nodes_and_marks_online() {
-        let (tx, _rx) = tokio::sync::mpsc::channel(10);
-        let mut store = Storage::new(tx);
-        store.set_id("node-A").await;
-
-        store.update_typology(vec!["node-B".into(), "node-C".into()]);
-
-        assert!(store.topology.contains("node-B"));
-        assert!(store.topology.contains("node-C"));
-
-        assert!(matches!(
-            store.node_status.get("node-B"),
-            Some(NodeStatus::Online(_))
-        ));
-        assert!(store.peer_pending.contains_key("node-B"));
-    }
-
-    #[tokio::test]
-    async fn update_values_adds_message_and_marks_all_peers_pending_except_src() {
-        let (tx, _rx) = tokio::sync::mpsc::channel(10);
-        let mut store = Storage::new(tx);
-        store.set_id("node-A").await;
-
-        store.update_typology(vec!["node-B".into(), "node-C".into()]);
-
-        store.update_values("node-A".to_string(), 42);
-
-        let key = *store.values.keys().next().unwrap();
-        let val = store.values.get(&key).unwrap();
-        assert_eq!(val.1, 42);
-
-        // node-B and node-C should have the key pending, but node-A should not
-        for peer in ["node-B", "node-C"] {
-            assert!(store.peer_pending.get(peer).unwrap().contains(&key));
-        }
-        assert!(
-            !store.peer_pending.contains_key("node-A")
-                || !store.peer_pending["node-A"].contains(&key)
-        );
-    }
-
-    #[tokio::test]
-    async fn remove_from_peer_pending_removes_key_and_updates_status() {
-        let (tx, _rx) = tokio::sync::mpsc::channel(10);
-        let mut store = Storage::new(tx);
-        store.set_id("node-A").await;
-
-        store.update_typology(vec!["node-B".into()]);
-        store.update_values("node-A".to_string(), 123);
-
-        let key = *store.values.keys().next().unwrap();
-
-        store.remove_from_peer_pending("node-B".to_string(), key);
-
-        assert!(store.peer_pending.get("node-B").unwrap().is_empty());
-        assert!(matches!(
-            store.node_status.get("node-B"),
-            Some(NodeStatus::Online(_))
-        ));
-    }
-
-    #[tokio::test]
-    async fn update_node_states_moves_stale_nodes_offline() {
-        let (tx, _rx) = tokio::sync::mpsc::channel(10);
-        let mut store = Storage::new(tx);
-        store.set_id("node-A").await;
-
-        // Insert a node with old online timestamp
-        store
-            .node_status
-            .insert("node-B".into(), NodeStatus::Online(time_now() - 60_000));
-
-        store.update_node_states();
-
-        assert!(matches!(
-            store.node_status.get("node-B"),
-            Some(NodeStatus::Offline(_))
-        ));
-    }
-}
+mod tests;

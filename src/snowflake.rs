@@ -2,6 +2,7 @@ use std::{
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
+use rand::Rng;
 
 const CUSTOM_EPOCH: u64 = 1577836800000; // Jan 1 2020 UTC in ms
 const NODE_BITS: u64 = 10;
@@ -12,6 +13,7 @@ const MAX_SEQ: u64 = (1 << SEQ_BITS) - 1;
 
 pub struct Snowflake {
     inner: Mutex<SnowflakeState>,
+    node_id: u64,
 }
 
 struct SnowflakeState {
@@ -20,42 +22,38 @@ struct SnowflakeState {
 }
 
 impl Snowflake {
+    /// Creates a new Snowflake with a random node ID.
     pub fn new() -> Self {
+        let node_id = rand::rng().random_range(0..=MAX_NODE_ID);
         Self {
-            inner: Mutex::new(SnowflakeState {
-                last_ts: 0,
-                sequence: 0,
-            }),
+            inner: Mutex::new(SnowflakeState { last_ts: 0, sequence: 0 }),
+            node_id,
         }
     }
 
-    pub fn next_id(&self, node_id: u64) -> u64 {
+    pub fn next_id(&self) -> u64 {
         let mut state = self.inner.lock().unwrap();
 
         let mut ts = current_time_ms();
 
         if ts < state.last_ts {
-            // Clock went backwards — wait until last_ts or panic
             ts = wait_next_ms(state.last_ts);
         }
 
         if ts == state.last_ts {
             state.sequence += 1;
             if state.sequence > MAX_SEQ {
-                // Sequence overflow in same ms — wait next ms
                 ts = wait_next_ms(state.last_ts);
                 state.sequence = 0;
                 state.last_ts = ts;
             }
         } else {
-            // New timestamp, reset sequence
             state.sequence = 0;
             state.last_ts = ts;
         }
 
-        // Compose ID: timestamp | node_id | sequence
         ((ts - CUSTOM_EPOCH) << (NODE_BITS + SEQ_BITS))
-            | ((node_id & MAX_NODE_ID) << SEQ_BITS)
+            | ((self.node_id & MAX_NODE_ID) << SEQ_BITS)
             | (state.sequence & MAX_SEQ)
     }
 }

@@ -1,14 +1,18 @@
+use std::sync::Arc;
 
-use crate::{
-    storage::Storage,
-};
+use tokio::sync::Mutex;
 
-pub async fn handle_broadcast_ok (
-    src: String,
-        _dest: String,
+use crate::storage::Storage;
+
+pub async fn handle_broadcast_ok(
+    _src: String,
+    dest: String,
     in_reply_to: u64,
-    storage: &mut Storage,
+    storage: Arc<Mutex<Storage>>,
 ) -> anyhow::Result<()> {
-    storage.remove_from_peer_pending(src, in_reply_to);
+    tokio::spawn(async move {
+        let storage = storage.lock().await;
+        storage.values.remove_pending(dest, in_reply_to).await;
+    });
     Ok(())
 }

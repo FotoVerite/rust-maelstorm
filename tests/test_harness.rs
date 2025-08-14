@@ -81,10 +81,11 @@ impl TestNetwork {
 
             // Otherwise, it's a message to a managed node
             let dest_node = self.nodes.get_mut(&msg.dest).unwrap(); // This unwrap should now be safe
-            let (tx, mut rx) = mpsc::channel(100);
+            let (tx, mut rx) = mpsc::channel::<String>(100);
+            let mut processed = HashMap::new();
 
             let msg_json = serde_json::to_string(&msg).unwrap();
-            process_message_line(msg_json, &mut *dest_node.storage.lock().await, tx)
+            process_message_line(msg_json, dest_node.storage.clone(), &mut processed, tx)
                 .await
                 .unwrap();
 

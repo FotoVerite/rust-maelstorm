@@ -1,14 +1,13 @@
-use crate::message::{Body, BroadcastMessage};
+use crate::message::{Body};
 
-pub fn send_broadcast(
+pub fn send_read(
     src: &String,
     dest: String,
     msg_id: u64,
-    message: BroadcastMessage,
 ) -> anyhow::Result<String> {
-    let reply = Body::Broadcast {
+    let reply = Body::Read {
         msg_id: msg_id,
-        message: message,
+        key: None
     };
 
     let response = serde_json::json!({

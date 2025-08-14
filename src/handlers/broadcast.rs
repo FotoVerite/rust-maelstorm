@@ -1,4 +1,6 @@
-use tokio::sync::mpsc::Sender;
+use std::sync::Arc;
+
+use tokio::sync::Mutex;
 
 use crate::{
     message::{BroadcastMessage, ReplyBody},
@@ -9,39 +11,49 @@ pub async fn handle_broadcast(
     src: String,
     dest: String,
     msg_id: u64,
-    storage: &mut Storage,
+    storage: Arc<Mutex<Storage>>,
     message: BroadcastMessage,
-    tx: Sender<String>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<String> {
+    let src_for_response = src.clone();
+    let mut guard = storage.lock().await;
     match message {
-        BroadcastMessage::Single(value) => {storage.update_values(src.clone(), value)},
-        BroadcastMessage::Hashmap(values ) => storage.update_counter(values),
-        _ => {}
+        BroadcastMessage::Single(value) => {
+            if guard.values.update_store_data(value) {
+                Some(value)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
 
-    }
+    // 3. Immediate broadcast_ok reply
     let reply = ReplyBody::BroadcastOk {
         in_reply_to: msg_id,
     };
     let response = serde_json::json!({
         "src": dest,
-        "dest": src,
+        "dest": src_for_response,
         "body": reply,
     });
-    let json = serde_json::to_string(&response)?;
 
-    Ok(tx.send(json).await?)
+    Ok(serde_json::to_string(&response)?)
 }
 
 pub async fn handle_broadcast_g_counter(
     src: String,
     dest: String,
     msg_id: u64,
-    storage: &mut Storage,
+    storage: Arc<Mutex<Storage>>,
     message: BroadcastMessage,
-    tx: Sender<String>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<String> {
     match message {
-        BroadcastMessage::Hashmap(value) => storage.update_counter(value),
+        BroadcastMessage::Hashmap(value) => {
+            tokio::spawn(async move {
+                let mut storage = storage.lock().await;
+                let _ = storage.g_counter.update_counter(value);
+            });
+        }
         _ => {}
     }
     let reply = ReplyBody::BroadcastOk {
@@ -54,5 +66,5 @@ pub async fn handle_broadcast_g_counter(
     });
     let json = serde_json::to_string(&response)?;
 
-    Ok(tx.send(json).await?)
+    Ok(json)
 }

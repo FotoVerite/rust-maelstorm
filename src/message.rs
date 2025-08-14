@@ -1,8 +1,8 @@
-use std::{collections::HashMap};
+use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Message {
     pub src: String,
     pub dest: String,
@@ -15,12 +15,12 @@ pub struct ReplyMessage {
     pub dest: String,
     pub body: ReplyBody,
 }
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(untagged)]
 pub enum BroadcastMessage {
     Single(u64),
     Multiple(Vec<u64>),
-    Hashmap(HashMap<String, u64>)
+    Hashmap(HashMap<String, u64>),
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -37,13 +37,20 @@ pub enum Body {
     #[serde(rename = "add")]
     Add { msg_id: u64, delta: u64 },
     #[serde(rename = "broadcast")]
-    Broadcast { msg_id: u64, message: BroadcastMessage },
+    Broadcast {
+        msg_id: u64,
+        message: BroadcastMessage,
+    },
     #[serde(rename = "broadcast_ok")]
     BroadcastOk { in_reply_to: u64 },
     #[serde(rename = "echo")]
     Echo { msg_id: u64, echo: String },
     #[serde(rename = "error")]
-    Error { in_reply_to: u64, code: u64, text: String,  },
+    Error {
+        in_reply_to: u64,
+        code: u64,
+        text: String,
+    },
     #[serde(rename = "generate")]
     Generate { msg_id: u64 },
     #[serde(rename = "read")]
@@ -65,14 +72,30 @@ pub enum Body {
     }, // Add more variants as needed
 }
 
+impl Body {
+    pub fn cache_id(&self) -> &u64 {
+        match self {
+            Self::Add { msg_id, .. } => msg_id,
+            Self::Broadcast { msg_id, .. } => msg_id,
+            Self::BroadcastOk { in_reply_to, .. } => in_reply_to,
+            Self::Cas { msg_id, .. } => msg_id,
+            Self::CasOk { in_reply_to, .. } => in_reply_to,
+            Self::Echo { msg_id, .. } => msg_id,
+            Self::Error { in_reply_to, .. } => in_reply_to,
+            Self::Generate { msg_id, .. } => msg_id,
+            Self::Init { msg_id, .. } => msg_id,
+            Self::Read { msg_id, .. } => msg_id,
+            Self::Topology { msg_id, .. } => msg_id,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum ReadMessage {
     Single(u64),
     Multiple(Vec<u64>),
 }
-
-
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
